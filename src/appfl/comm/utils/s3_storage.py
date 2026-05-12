@@ -3,7 +3,6 @@ import csv
 import sys
 import time
 import boto3
-import pathlib
 import requests
 import os.path as osp
 from typing import Optional
