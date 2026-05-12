@@ -28,7 +28,7 @@ class NaiveAuthenticator(BaseAuthenticator):
             raise ValueError(
                 f"auth_token must be a non-whitespace string of at least "
                 f"{self._MIN_TOKEN_LEN} characters. Generate one with "
-                f"`python -c \"import secrets; print(secrets.token_urlsafe(32))\"`."
+                f'`python -c "import secrets; print(secrets.token_urlsafe(32))"`.'
             )
         warnings.warn(
             "NaiveAuthenticator is a shared-secret scheme suitable only for "
