@@ -40,9 +40,7 @@ def _open_credentials_file_securely(path: str):
         raise
 
     mode_bits = stat.S_IMODE(st.st_mode)
-    bad_bits = mode_bits & (
-        stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH
-    )
+    bad_bits = mode_bits & (stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH)
     if bad_bits:
         os.close(fd)
         raise PermissionError(

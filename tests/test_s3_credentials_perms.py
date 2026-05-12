@@ -3,7 +3,6 @@ appfl.comm.utils.s3_storage._open_credentials_file_securely."""
 
 import csv
 import os
-import sys
 
 import pytest
 
