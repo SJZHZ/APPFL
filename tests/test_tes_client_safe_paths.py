@@ -138,8 +138,6 @@ def test_entry_point_argparse_defaults_are_none(monkeypatch):
     well-known /tmp/... paths."""
     captured = {}
 
-    real_parse = argparse.ArgumentParser.parse_args
-
     def _fake_parse(self, args=None, namespace=None):
         # Snapshot the registered defaults instead of actually running.
         for action in self._actions:
