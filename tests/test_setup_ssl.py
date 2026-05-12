@@ -48,7 +48,9 @@ def stub_openssl(monkeypatch):
     return calls
 
 
-def test_rejects_shell_metachars_in_ssl_dir(monkeypatch, tmp_path, stub_openssl, capsys):
+def test_rejects_shell_metachars_in_ssl_dir(
+    monkeypatch, tmp_path, stub_openssl, capsys
+):
     """A ssl_dir with shell metacharacters must be rejected and the prompt
     must re-ask, eventually accepting a clean path."""
     pwned_marker = tmp_path / "pwned"
