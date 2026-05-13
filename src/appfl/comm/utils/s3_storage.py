@@ -4,13 +4,17 @@ import stat
 import sys
 import time
 import boto3
-import pathlib
 import requests
 import warnings
 import os.path as osp
 from typing import Optional
 from botocore.exceptions import ClientError
-from appfl.misc.utils import dump_data_to_file, load_data_from_file, id_generator
+from appfl.misc.utils import (
+    dump_data_to_file,
+    load_data_from_file,
+    id_generator,
+    secure_appfl_dir,
+)
 
 
 def _open_credentials_file_securely(path: str):
@@ -100,15 +104,11 @@ class CloudStorage:
             new_inst = cls.__new__(cls)
             new_inst.bucket = s3_bucket
 
-            # Set s3_tmp_dir with fallback for read-only containers
+            # Set s3_tmp_dir with fallback for read-only containers.
+            # secure_appfl_dir handles the home/`/tmp` fallback and enforces
+            # 0o700 / current-user ownership on every component.
             if s3_tmp_dir is None:
-                try:
-                    s3_tmp_dir = str(pathlib.Path.home() / ".appfl" / "s3_tmp_dir")
-                    pathlib.Path(s3_tmp_dir).mkdir(parents=True, exist_ok=True)
-                except OSError:
-                    # Fallback to /tmp/.appfl if home directory is read-only
-                    s3_tmp_dir = "/tmp/.appfl/s3_tmp_dir"
-                    pathlib.Path(s3_tmp_dir).mkdir(parents=True, exist_ok=True)
+                s3_tmp_dir = secure_appfl_dir("s3_tmp_dir")
             s3_kwargs = {}
             if s3_creds_file is not None:
                 with _open_credentials_file_securely(s3_creds_file) as file:
