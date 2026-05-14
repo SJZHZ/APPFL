@@ -63,6 +63,11 @@ def serve(
             ("grpc.max_concurrent_streams", max_workers),
             ("grpc.max_send_message_length", max_message_size),
             ("grpc.max_receive_message_length", max_message_size),
+            ("grpc.keepalive_time_ms", 60000),
+            ("grpc.keepalive_timeout_ms", 20000),
+            ("grpc.keepalive_permit_without_calls", 1),
+            ("grpc.http2.max_pings_without_data", 0),
+            ("grpc.http2.min_ping_interval_without_data_ms", 10000),
         ],
         interceptors=(APPFLAuthMetadataInterceptor(authenticator),)
         if use_authenticator
