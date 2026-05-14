@@ -67,7 +67,7 @@ server_agent.logger.info(
 # Get sample size from clients
 if args.get_sample_size:
     server_agent.logger.info("[Clients] Requesting sample sizes from all clients...")
-server_communicator.send_task_to_all_clients(task_name="get_sample_size")
+    server_communicator.send_task_to_all_clients(task_name="get_sample_size")
     sample_size_ret = server_communicator.recv_result_from_all_clients()[1]
     for client_endpoint_id, sample_size in sample_size_ret.items():
         server_agent.set_sample_size(client_endpoint_id, sample_size["sample_size"])
