@@ -71,9 +71,6 @@ def get_dummy_cifar10(
     Returns:
         Tuple of (train_dataset, test_dataset)
     """
-
-    print(f"Creating dummy CIFAR-10 datasets for client {client_id}")
-
     # Create small train dataset with different seed for each client
     train_dataset = DummyCIFAR10Dataset(
         num_samples=samples_per_client,
@@ -84,13 +81,6 @@ def get_dummy_cifar10(
     test_dataset = DummyCIFAR10Dataset(
         num_samples=32,  # Even smaller test set
         seed=1000,  # Same seed for all clients (shared test set)
-    )
-
-    print(
-        f"Client {client_id} dummy datasets: train={len(train_dataset)}, test={len(test_dataset)}"
-    )
-    print(
-        f"Memory footprint: ~{samples_per_client * 3 * 32 * 32 * 4 / 1024 / 1024:.1f} MB per client"
     )
 
     return train_dataset, test_dataset

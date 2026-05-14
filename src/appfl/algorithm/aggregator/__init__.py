@@ -16,6 +16,11 @@ try:
 except:  # noqa: E722
     pass
 
+try:
+    from .dimat_aggregator import DIMATaggregator
+except:  # noqa: E722
+    pass
+
 __all__ = [
     "BaseAggregator",
     "FedAvgAggregator",
@@ -30,4 +35,5 @@ __all__ = [
     "IIADMMAggregator",
     "ICEADMMAggregator",
     "FedSBAggregator",
+    "DIMATaggregator",
 ]

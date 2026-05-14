@@ -1,127 +1,225 @@
-# APPFL gRPC Memory Profiling and Optimization [Experimental]
+# Memory Optimization using Chunked Model Transmission and Aggregation
 
-This directory contains tools for memory profiling and optimization of APPFL's federated learning components using memray.
+To further optimize memory usage during federated learning with large models, we have implemented chunked model transmission and aggregation. This approach breaks down large model parameters into smaller chunks, reducing peak memory consumption on both the server and client sides.
 
-## Quick Start
+## 📁 Files Overview
 
-1. **Install memray**:
-   ```bash
-   pip install memray
-   ```
+| File | Description |
+|------|-------------|
+| `run_server_memray.py` | Memory profiling wrapper for the gRPC server |
+| `run_client_memray.py` | Memory profiling wrapper for gRPC clients |
+| `run_llm_experiment.sh` | LLM memory profiling experiment script |
+| `run_resnet_experiment.sh` | ResNet memory profiling experiment script |
+| `analyze_profiles.py` | Automatic analysis script for memory profiles |
+| `dummy_cifar10_dataset.py` | Lightweight dummy dataset for training memory isolation |
+| `batch_submission_large.sh` | PBS batch submission script for multi-node 70B experiments |
+| `configs/` | Configuration files for LLM and ResNet experiments |
 
-2. **Run memory profiling experiments (Recommended)**:
+## 🔨 0. Installation
 
-   **CIFAR-10 experiment** (**recommended** - uses real CIFAR-10 configs):
-   ```bash
-   cd examples
-   chmod +x memory_profiling/run_cifar_experiment.sh
-   ./memory_profiling/run_cifar_experiment.sh
-   ```
-
-   **ResNet experiment** (alternative - focuses on training memory with dummy data):
-   ```bash
-   cd examples
-   chmod +x memory_profiling/run_resnet_experiment.sh
-   ./memory_profiling/run_resnet_experiment.sh
-   ```
-
-   **MNIST experiment** (alternative - uses real MNIST data):
-   ```bash
-   cd examples
-   chmod +x memory_profiling/run_mnist_experiment.sh
-   ./memory_profiling/run_mnist_experiment.sh
-   ```
-
-3. **Or run experiments manually**:
-   ```bash
-   cd examples
-
-   # Original version
-   python memory_profiling/run_server_memray.py --config ./memory_profiling/configs/server_resnet_dummy.yaml &
-   python memory_profiling/run_client_memray.py --config ./memory_profiling/configs/client_1_resnet_dummy.yaml &
-   python memory_profiling/run_client_memray.py --config ./memory_profiling/configs/client_2_resnet_dummy.yaml
-
-
-   # Optimized version
-   python memory_profiling/run_server_memray.py --config ./memory_profiling/configs/server_resnet_dummy.yaml --use_optimized_version &
-   python memory_profiling/run_client_memray.py --config ./memory_profiling/configs/client_1_resnet_dummy.yaml --use_optimized_version &
-   python memory_profiling/run_client_memray.py --config ./memory_profiling/configs/client_2_resnet_dummy.yaml --use_optimized_version
-   ```
-
-4. **View results**: Open the generated HTML flamegraph files in your browser from the output directory.
-
-## Files Overview
-
-- `run_server_memray.py` - Memory profiling wrapper for gRPC server
-- `run_client_memray.py` - Memory profiling wrapper for gRPC client
-- `run_cifar_experiment.sh` - CIFAR-10 memory profiling experiment (recommended)
-- `run_resnet_experiment.sh` - ResNet memory profiling experiment
-- `run_mnist_experiment.sh` - MNIST memory profiling experiment
-- `analyze_profiles.py` - Automatic analysis script for memory profiles
-- `dummy_cifar10_dataset.py` - Lightweight dummy dataset for training memory isolation
-- `configs/` - Configuration files for ResNet experiments
-
-## Memory Optimizations Implemented
-
-APPFL now includes built-in memory optimizations that can be enabled with the `--use_optimized_version` flag. These optimizations are integrated directly into the main codebase with `optimize_memory` configuration flags.
-
-### Components Optimized
-
-#### 1. VanillaTrainer
-- **Tensor Cloning**: Uses `tensor.clone().detach()` instead of `copy.deepcopy()` for model state storage
-- **In-place Operations**: Memory-efficient gradient computation
-- **Strategic Cleanup**: Immediate deletion of previous model states after use
-
-#### 2. ServerAgent & ClientAgent
-- **Model Deserialization**: Context managers for efficient BytesIO handling
-- **CPU-first Loading**: Reduces GPU memory pressure
-- **Garbage Collection**: Strategic cleanup after model processing and training
-
-#### 3. gRPC Communicators (Server & Client)
-- **Efficient Byte Handling**: Uses `bytearray` instead of bytes concatenation
-- **Streaming Optimization**: Periodic garbage collection during large transfers
-- **Context Managers**: Memory-efficient model serialization/deserialization
-
-### Configuration
-
-Memory optimizations are controlled by `optimize_memory` flags in configuration:
-
-```yaml
-# Server configuration
-server_configs:
-  optimize_memory: true
-  comm_configs:
-    grpc_configs:
-      optimize_memory: true
-
-# Client configuration
-client_configs:
-  optimize_memory: true
-  train_configs:
-    optimize_memory: true
-```
-
-Or automatically enabled with `--use_optimized_version` flag in profiling scripts.
-
-### Expected Benefits
-
-- **Reduced Peak Memory Usage**: 20-40% reduction in memory footprint
-- **Faster Garbage Collection**: Strategic cleanup reduces GC pressure
-- **Better Large Model Handling**: Efficient tensor operations for models like ResNet
-- **Improved gRPC Performance**: Optimized streaming for large parameter transfers
-
-### Viewing Memory Profiles
-
-Use memray to analyze the generated profiles:
+To run the memory profiling experiments, you need to install the required dependencies, including memray for memory profiling and any additional dependencies for the specific models you want to test (e.g., `transformers` for LLMs).
 
 ```bash
-# Generate flamegraph
-memray flamegraph memory_profiles/server_optimized_memory_profile.bin
+pip install memray transformers
+```
 
-# View memory statistics
-memray stats memory_profiles/client_Client1_optimized_memory_profile.bin
+## 🚀 1. How to Run ResNet Experiment (Easy Test)
 
-# Compare original vs optimized
-memray stats memory_profiles/server_original_memory_profile.bin
-memray stats memory_profiles/server_optimized_memory_profile.bin
+A ResNet18 experiment is provided for profiling training memory with dummy CIFAR-10 data. This is useful for studying model parameter transfer and local training memory overhead with a smaller model (~11M parameters).
+
+**💡Note**: You can change `NUM_CLIENTS` in `run_resnet_experiment.sh` to simulate a different number of clients.
+
+```bash
+cd examples
+chmod +x memory_profiling/run_resnet_experiment.sh
+./memory_profiling/run_resnet_experiment.sh
+```
+
+### Configurations
+
+The server uses `configs/server_resnet_dummy.yaml` with the standard `VanillaTrainer` and a ResNet18 model. To enable chunked model transmission, set `use_model_chunking: True` in the gRPC communication configurations for both the server and clients. You can specify the maximum size for each chunk via `model_chunk_size`. It is recommended to use the same chunk size on both server and clients. Here, we use a chunk size of 10MB, appropriate for the ResNet18 model size (~11M parameters, ~44MB in fp32).
+
+```yaml
+# configs/server_resnet_dummy.yaml
+client_configs:
+  train_configs:
+    trainer: "VanillaTrainer"
+    mode: "step"
+    num_local_steps: 10
+    optim: "Adam"
+    optim_args:
+      lr: 0.01
+    loss_fn_path: "./resources/loss/celoss.py"
+    loss_fn_name: "CELoss"
+    do_validation: True
+    train_batch_size: 16
+    val_batch_size: 16
+
+  model_configs:
+    model_path: "./resources/model/resnet.py"
+    model_name: "ResNet18"
+
+server_configs:
+  num_clients: 2  # Overridden by the script automatically
+  scheduler: "SyncScheduler"
+  scheduler_kwargs:
+    same_init_model: True
+  aggregator: "FedAvgAggregator"
+  aggregator_kwargs:
+    client_weights_mode: "equal"
+  device: "cpu"
+  num_global_epochs: 5
+  logging_output_dirname: "./output"
+  logging_output_filename: "result"
+  comm_configs:
+    grpc_configs:
+      server_uri: localhost:50051
+      max_message_size: 10485760  # 10MB for ResNet parameters
+      use_ssl: False
+      use_model_chunking: True
+      model_chunk_size: 10485760  # 10MB chunk size
+```
+
+The clients use `configs/client_1_resnet_dummy.yaml` as the shared base config, with dummy CIFAR-10 data generated by [`dummy_cifar10_dataset.py`](dummy_cifar10_dataset.py).
+
+```yaml
+# configs/client_1_resnet_dummy.yaml
+client_id: "Client1"
+train_configs:
+  device: "cpu"
+  logging_output_dirname: "./output"
+  logging_output_filename: "result"
+
+data_configs:
+  dataset_path: "./memory_profiling/dummy_cifar10_dataset.py"
+  dataset_name: "get_dummy_cifar10"
+  dataset_kwargs:
+    num_clients: 2
+    client_id: 0
+    samples_per_client: 64
+
+comm_configs:
+  grpc_configs:
+    server_uri: localhost:50051
+    max_message_size: 10485760  # 10MB for ResNet parameters
+    use_ssl: False
+    use_model_chunking: True
+    model_chunk_size: 10485760  # 10MB chunk size
+```
+
+### Output
+
+The script generates memory profiling files for the optimized version and runs an automatic analysis at the end.
+
+
+## 🚀 2. How to Run LLM Experiment (Single Node - 8B Model)
+
+You can easily leverage the script provided in `examples/memory_profiling/run_llm_experiment.sh` to execute the memory profiling experiments for large language models (LLMs) with chunked model transmission.
+
+**💡Note**: You can change `NUM_CLIENTS` in `run_llm_experiment.sh` to simulate different number of FL clients without needing to change anything else, including the configuration file. The script will handle everything automatically.
+
+```bash
+cd examples
+chmod +x memory_profiling/run_llm_experiment.sh
+./memory_profiling/run_llm_experiment.sh
+```
+
+### Configurations
+
+The script launches one server and several clients and runs the optimized version of FL training on LLM. The server uses the configuration file `examples/memory_profiling/configs/server_llm_dummy.yaml`, which uses the [`LLMDummyTrainer`](../../src/appfl/algorithm/trainer/llm_dummy_trainer.py) — a trainer that skips local training and only handles parameter loading and retrieval.
+
+To enable the optimization, set `use_model_chunking: True` in the gRPC communication configurations for both the server and clients. You can specify the maximum size for each chunk via `model_chunk_size`. It is recommended to use the same chunk size on both server and clients. Here, we use a chunk size of 4GB.
+
+The model used in this example is Meta's Llama 3.1 8B model, loaded via HuggingFace using the script in [`examples/resources/model/hf_llm.py`](../resources/model/hf_llm.py).
+
+```yaml
+# configs/server_llm_dummy.yaml
+client_configs:
+  train_configs:
+    trainer: "LLMDummyTrainer"
+
+  model_configs:
+    model_path: "./resources/model/hf_llm.py"
+    model_name: "load_hf_llm"
+    model_kwargs:
+      model_name: "meta-llama/Llama-3.1-8B"
+
+server_configs:
+  num_clients: 2 # This will be overridden by the script automatically
+  scheduler: "SyncScheduler"
+  scheduler_kwargs:
+    same_init_model: True
+  aggregator: "FedAvgAggregator"
+  aggregator_kwargs:
+    client_weights_mode: "equal"
+  device: "cpu"
+  num_global_epochs: 3
+  logging_output_dirname: "./output"
+  logging_output_filename: "result"
+  comm_configs:
+    grpc_configs:
+      server_uri: localhost:50051
+      max_message_size: 104857600  # 100MB for LLM parameters
+      use_ssl: False
+      use_model_chunking: True # Enable chunked model transmission
+      model_chunk_size: 4294967296  # 4GB
+```
+
+The clients use `configs/client_1_llm_dummy.yaml` as a shared base configuration. The script automatically sets `--client_idx` and `--num_clients` for each client process.
+
+```yaml
+# configs/client_1_llm_dummy.yaml
+client_id: "Client1"
+train_configs:
+  device: "cpu"  # Use CPU for consistent memory profiling
+  logging_output_dirname: "./output"
+  logging_output_filename: "result"
+
+data_configs:
+  dataset_path: "./memory_profiling/dummy_cifar10_dataset.py"
+  dataset_name: "get_dummy_cifar10"
+  dataset_kwargs:
+    num_clients: 2
+    client_id: 0
+    samples_per_client: 64  # Very small dataset to isolate training memory
+
+comm_configs:
+  grpc_configs:
+    server_uri: localhost:50051
+    max_message_size: 104857600  # 100MB for LLM parameters
+    use_ssl: False
+    use_model_chunking: True # Enable chunked model transmission
+    model_chunk_size: 4294967296  # 4GB
+```
+
+### Output
+
+The script generates memory profiling files for the optimized version and runs an automatic analysis at the end.
+
+## 🚀🚀 3. How to Run LLM Experiment (Multi Nodes - 70B Model)
+
+For 8B models, a single node is sufficient. However, to run 70B models, multiple nodes are required so that the server and each client operate on an exclusive node to avoid OOM issues. No configuration changes are needed — only update the model name (and optionally `model_chunk_size`, though 4GB works well for 70B models).
+
+A reference batch submission script for the [Polaris](https://docs.alcf.anl.gov/polaris/getting-started/) machine at ALCF using the PBS job scheduler is provided at `batch_submission_large.sh`. Since Polaris compute nodes cannot accept incoming connections, the script sets up SSH tunneling to enable communication between the server and clients.
+
+### Results
+
+Both the server and client are able to run on a node with 512 GB memory.
+
+Server Memory Usage (Peak: 309.8GB)
+![alt text](server-mem.png)
+
+Client Memory Usage (Peak: 302.6GB)
+![alt text](client-mem.png)
+
+## 🔍 Viewing Memory Profiles
+
+You can use memray to analyze the generated `.bin` profiles directly:
+
+```bash
+# Generate flamegraph (open the output HTML in a browser)
+memray flamegraph memory_profiles/resnet_xxxx/server_optimized_memory_profile.bin
+
+# View summary statistics
+memray stats memory_profiles/resnet_xxxx/server_optimized_memory_profile.bin
 ```

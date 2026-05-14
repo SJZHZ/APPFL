@@ -1,6 +1,45 @@
 Changelog
 =========
 
+appfl v1.10.0
+-------------
+
+New Features
+~~~~~~~~~~~~
+
+- Bump the version requirements of ``globus-sdk``, ``globus-compute-sdk``, and ``globus-compute-endpoint`` to the latest versions.
+- Add a tutorial for creating multi-user Globus Compute endpoints on Cloud at `here <https://appfl.ai/en/latest/tutorials/examples_multi_user_gcep.html>`_.
+- Update the tutorial for local testing APPFLx server at `here <https://github.com/APPFL/APPFL/tree/main/src/appfl/service#appfl-as-a-service-appflx>`_.
+
+appfl v1.9.1
+------------
+
+Bug Fixes
+~~~~~~~~~
+
+- Include support for ``globus-sdk`` version 4.x for Globus-based authentication in gRPC.
+
+appfl v1.9.0
+------------
+
+New Features
+~~~~~~~~~~~~
+
+- Introduce support for streamed aggregation in gRPC communication, enabling memory-efficient federated learning for large models and datasets. [`Documentation <https://github.com/APPFL/APPFL/tree/main/examples/memory_profiling>`_].
+- Add a new example demonstrating federated learning with Graph Neural Networks (GNNs) using PyTorch Geometric from `@Truc Nguyen <https://github.com/trucndt>`_. [`Documentation <https://github.com/APPFL/APPFL/tree/main/examples/resources/config_gc/pyg>`_].
+- Integrate additional privacy-preserving mechanisms from `@aash-mohammad <https://github.com/aash-mohammad>`_, including: secure aggregation and differential privacy via Opacus-Privacy.
+- Add tutorial notebooks for running APPFL on NERSC systems, available `here <https://github.com/APPFL/APPFL/tree/main/examples/notebook_tutorials/mnist_nersc>`_.
+- Add tutorial notebooks for running APPFL on AI-READI datasets, available `here <https://github.com/APPFL/APPFL/tree/main/examples/notebook_tutorials/aireadi_arvo_course>`_.
+
+
+Bug Fixes
+~~~~~~~~~
+
+- Resolve race conditions in the FedCompass implementation.
+- Fix issues when running FedCompass with Globus Compute.
+- Improve GitHub workflows and CI/CD actions for testing and deployment stability.
+
+
 appfl v1.8.0
 ------------
 

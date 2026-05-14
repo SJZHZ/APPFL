@@ -3,7 +3,7 @@ client_configs:
     # Local trainer
     trainer: "VanillaTrainer"
     mode: "step"
-    num_local_steps: 50  # Reduced for faster profiling
+    num_local_steps: 10  # Reduced for faster profiling
     optim: "Adam"
     optim_args:
       lr: 0.01
@@ -48,3 +48,5 @@ server_configs:
       server_uri: localhost:50051
       max_message_size: 10485760  # 10MB for ResNet parameters
       use_ssl: False
+      use_model_chunking: True
+      model_chunk_size: 10485760 # 10MB chunk size for ResNet parameters

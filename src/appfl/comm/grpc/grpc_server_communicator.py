@@ -24,6 +24,7 @@ from .grpc_communicator_pb2 import (
     CustomActionResponse,
     ServerHeader,
     ServerStatus,
+    DataBuffer,
 )
 from proxystore.store import Store
 from proxystore.proxy import extract
@@ -62,6 +63,34 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
         self._load_google_drive(server_agent.server_agent_config)
         self._num_connected_clients = 0
         self._total_num_clients = self.server_agent.get_num_clients()
+
+        # Streamed aggregation configuration
+        self.use_model_chunking = kwargs.get("use_model_chunking", False)
+        self.model_chunk_size = kwargs.get("model_chunk_size", 1 * 1024 * 1024 * 1024)
+        if self.use_model_chunking:
+            # Verify aggregator supports streamed aggregation
+            from appfl.algorithm.aggregator import FedAvgAggregator
+
+            supported_aggregators = [FedAvgAggregator]
+            aggregator = server_agent.aggregator
+
+            if not any(
+                isinstance(aggregator, agg_type) for agg_type in supported_aggregators
+            ):
+                supported_names = [agg.__name__ for agg in supported_aggregators]
+                raise ValueError(
+                    f"Streamed aggregation (use_model_chunking=True) is only supported with "
+                    f"{', '.join(supported_names)}, but got {type(aggregator).__name__}. "
+                    f"Please use a supported aggregator or disable model chunking."
+                )
+
+            # Configure chunk size on the aggregator
+            aggregator.set_model_chunk_size(self.model_chunk_size)
+
+            self.logger.debug(
+                f"Streamed aggregation enabled on server with {type(aggregator).__name__}, "
+                f"chunk size: {self.model_chunk_size / (1024**2):.2f} MB"
+            )
 
     def GetConfiguration(self, request, context):
         """
@@ -124,14 +153,16 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
                     warning_message="Loading metadata fails due to untrusted data in the metadata, you can fix this by setting `trusted=True` in `grpc_configs` or use an authenticator.",
                 )
             use_s3 = meta_data.get("_use_s3", False)
+            model_key = None
+            model_url = None
             if use_s3:
                 model_key = meta_data.get("model_key", None)
                 model_url = meta_data.get("model_url", None)
 
             model = self.server_agent.get_parameters(**meta_data, blocking=True)
-            meta_data = {}
+            response_meta_data = {}
             if isinstance(model, tuple):
-                model, meta_data = model
+                model, response_meta_data = model
 
             if use_s3:
                 model = send_model_by_pre_signed_s3(
@@ -144,7 +175,7 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
                     logger=self.logger,
                 )
 
-            meta_data = yaml.dump(meta_data)
+            serialized_meta_data = yaml.dump(response_meta_data)
             if self.use_proxystore:
                 model = self.proxystore.proxy(model)
 
@@ -153,15 +184,38 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
                     model, f"init_global_model{int(time.time())}.pt"
                 )
 
-            model_serialized = serialize_model(model)
-            response_proto = GetGlobalModelRespone(
-                header=ServerHeader(status=ServerStatus.RUN),
-                global_model=model_serialized,
-                meta_data=meta_data,
-            )
-            yield from proto_to_databuffer(
-                response_proto, max_message_size=self.max_message_size
-            )
+            # Optimized protocol: Stream metadata separately from model data
+            if self.optimize_memory:
+                # Step 1: Send metadata-only message (no model bytes)
+                metadata_proto = GetGlobalModelRespone(
+                    header=ServerHeader(status=ServerStatus.RUN),
+                    global_model=b"",  # Empty - signals that model data follows separately
+                    meta_data=serialized_meta_data,
+                )
+                yield from proto_to_databuffer(
+                    metadata_proto, max_message_size=self.max_message_size
+                )
+
+                # Step 2: Serialize model and stream raw bytes directly (bypasses protobuf parsing)
+                model_serialized = serialize_model(model)
+
+                yield from self._stream_raw_bytes(
+                    model_serialized, self.max_message_size
+                )
+
+                # Cleanup
+                del model_serialized
+                gc.collect()
+            else:
+                model_serialized = serialize_model(model)
+                response_proto = GetGlobalModelRespone(
+                    header=ServerHeader(status=ServerStatus.RUN),
+                    global_model=model_serialized,
+                    meta_data=serialized_meta_data,
+                )
+                yield from proto_to_databuffer(
+                    response_proto, max_message_size=self.max_message_size
+                )
         except Exception as e:
             logging.error("An error occurred", exc_info=True)
             # Handle the exception in a way that's appropriate for your application
@@ -183,30 +237,83 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
         try:
             request = UpdateGlobalModelRequest()
 
-            # Collect byte chunks
-            data_chunks = []
-            chunk_count = 0
-            for bytes_chunk in request_iterator:
-                data_chunks.append(bytes_chunk.data_bytes)
-                chunk_count += 1
-                # Periodic garbage collection for large transfers
-                if self.optimize_memory and chunk_count % 100 == 0:
+            if self.optimize_memory:
+                # Optimized protocol: Parse metadata first, then extract raw model bytes
+                data_chunks = []
+                chunk_count = 0
+                total_bytes = 0
+                for bytes_chunk in request_iterator:
+                    data_chunks.append(bytes_chunk.data_bytes)
+                    total_bytes += len(bytes_chunk.data_bytes)
+                    chunk_count += 1
+                    if chunk_count % 20 == 0:
+                        gc.collect()
+
+                # Parse metadata from first chunk(s)
+                metadata_size = 0
+                for i in range(1, min(len(data_chunks) + 1, 10)):
+                    try:
+                        metadata_bytes = b"".join(data_chunks[:i])
+                        request.ParseFromString(metadata_bytes)
+                        metadata_size = len(metadata_bytes)
+                        break
+                    except Exception:
+                        continue
+
+                if metadata_size == 0:
+                    raise Exception("Failed to parse request metadata")
+
+                client_id = request.header.client_id
+                self.logger.info(
+                    f"Received UpdateGlobalModel request from client {client_id}"
+                )
+
+                # Check if local model data follows as raw bytes
+                if request.local_model == b"":
+                    # Extract model bytes from remaining chunks
+                    model_buffer = io.BytesIO()
+                    bytes_consumed = 0
+
+                    for chunk in data_chunks:
+                        if bytes_consumed >= metadata_size:
+                            model_buffer.write(chunk)
+                        elif bytes_consumed + len(chunk) > metadata_size:
+                            offset = metadata_size - bytes_consumed
+                            model_buffer.write(chunk[offset:])
+                        bytes_consumed += len(chunk)
+
+                    del data_chunks
                     gc.collect()
 
-            # Efficiently concatenate and parse
-            bytes_received = efficient_bytearray_concatenation(
-                data_chunks, optimize_memory=self.optimize_memory
-            )
-            request.ParseFromString(bytes_received)
+                    model_buffer.seek(0)
+                    model_bytes = model_buffer.read()
+                    del model_buffer
 
-            if self.optimize_memory:
+                    local_model = model_bytes
+                else:
+                    local_model = request.local_model
+                    del data_chunks
+            else:
+                # Original protocol: concatenate all and parse
+                data_chunks = []
+                chunk_count = 0
+                for bytes_chunk in request_iterator:
+                    data_chunks.append(bytes_chunk.data_bytes)
+                    chunk_count += 1
+
+                bytes_received = efficient_bytearray_concatenation(
+                    data_chunks, optimize_memory=False
+                )
+                request.ParseFromString(bytes_received)
+
                 optimize_memory_cleanup(data_chunks, bytes_received, force_gc=True)
                 del data_chunks, bytes_received
-            self.logger.info(
-                f"Received UpdateGlobalModel request from client {request.header.client_id}"
-            )
-            client_id = request.header.client_id
-            local_model = request.local_model
+
+                self.logger.info(
+                    f"Received UpdateGlobalModel request from client {request.header.client_id}"
+                )
+                client_id = request.header.client_id
+                local_model = request.local_model
             if len(request.meta_data) == 0:
                 meta_data = {}
             else:
@@ -237,6 +344,14 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
                     "grpc",
                     deserialize_model(local_model),
                 )
+
+            # Streamed aggregation: chunk metadata is passed through to aggregator
+            if self.use_model_chunking and "_chunk_idx" in meta_data:
+                self.logger.info(
+                    f"Streamed aggregation: processing chunk [{meta_data['_chunk_idx'] + 1}/"
+                    f"{meta_data['_total_chunks']}] from client {client_id}"
+                )
+
             # Memory optimization: Avoid deepcopy when possible
             if len(meta_data) > 0:
                 if self.optimize_memory:
@@ -251,14 +366,27 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
                             "_use_s3",
                             "model_key",
                             "model_url",
+                            "_chunk_idx",
+                            "_total_chunks",
+                            "_chunk_keys",
                         ]
                     }
                     if (
                         meta_data_print
                     ):  # Only log if there's something meaningful to show
-                        self.logger.info(
-                            f"Received meta data from {request.header.client_id}:\n{pprint.pformat(meta_data_print)}"
-                        )
+                        # For chunked aggregation, only log for the final chunk
+                        if self.use_model_chunking and "_chunk_idx" in meta_data:
+                            if (
+                                meta_data["_chunk_idx"]
+                                == meta_data["_total_chunks"] - 1
+                            ):
+                                self.logger.info(
+                                    f"Received metadata from {request.header.client_id}:\n{pprint.pformat(meta_data_print)}"
+                                )
+                        else:
+                            self.logger.info(
+                                f"Received metadata from {request.header.client_id}:\n{pprint.pformat(meta_data_print)}"
+                            )
                     del meta_data_print  # Immediate cleanup
                 else:
                     # Original behavior with deepcopy
@@ -269,13 +397,28 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
                         "_use_s3",
                         "model_key",
                         "model_url",
+                        "_chunk_keys",
+                        "_chunk_idx",
+                        "_total_chunks",
                     ]
                     for key in remove_keys:
                         if key in meta_data_print:
                             del meta_data_print[key]
-                    self.logger.info(
-                        f"Received the following meta data from {request.header.client_id}:\n{pprint.pformat(meta_data_print)}"
-                    )
+                    # For chunked aggregation, only log for the final chunk
+                    if meta_data_print:
+                        if self.use_model_chunking and "_chunk_idx" in meta_data:
+                            if (
+                                meta_data["_chunk_idx"]
+                                == meta_data["_total_chunks"] - 1
+                            ):
+                                self.logger.info(
+                                    f"Received metadata from {request.header.client_id}:\n{pprint.pformat(meta_data_print)}"
+                                )
+                        else:
+                            self.logger.info(
+                                f"Received metadata from {request.header.client_id}:\n{pprint.pformat(meta_data_print)}"
+                            )
+
             global_model = self.server_agent.global_update(
                 client_id, local_model, blocking=True, **meta_data
             )
@@ -308,36 +451,45 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
 
             meta_data = yaml.dump(meta_data)
 
-            # Memory optimization: Use optimized serialization
-            if self.optimize_memory:
-                global_model_serialized = self._serialize_model_optimized(global_model)
-                # Clear global model from memory before creating response
-                del global_model
-                gc.collect()
-            else:
-                global_model_serialized = serialize_model(global_model)
-
             status = (
                 ServerStatus.DONE
                 if self.server_agent.training_finished()
                 else ServerStatus.RUN
             )
-            response = UpdateGlobalModelResponse(
-                header=ServerHeader(status=status),
-                global_model=global_model_serialized,
-                meta_data=meta_data,
-            )
 
-            # Memory optimization: Use optimized streaming with cleanup
+            # Optimized protocol: Stream metadata separately from model data
             if self.optimize_memory:
+                # Step 1: Send metadata-only message (no model bytes)
+                metadata_proto = UpdateGlobalModelResponse(
+                    header=ServerHeader(status=status),
+                    global_model=b"",  # Empty - signals that model data follows separately
+                    meta_data=meta_data,
+                )
                 for bytes_chunk in self._proto_to_databuffer_optimized(
-                    response, max_message_size=self.max_message_size
+                    metadata_proto, max_message_size=self.max_message_size
                 ):
                     yield bytes_chunk
+
+                # Step 2: Serialize and stream model data directly
+                global_model_serialized = self._serialize_model_optimized(global_model)
+                del global_model
+                gc.collect()
+
+                yield from self._stream_raw_bytes(
+                    global_model_serialized, self.max_message_size
+                )
+
                 # Final cleanup
-                del global_model_serialized, response
+                del global_model_serialized
                 gc.collect()
             else:
+                # Original protocol: Embed model in protobuf (backward compatible)
+                global_model_serialized = serialize_model(global_model)
+                response = UpdateGlobalModelResponse(
+                    header=ServerHeader(status=status),
+                    global_model=global_model_serialized,
+                    meta_data=meta_data,
+                )
                 for bytes_chunk in proto_to_databuffer(
                     response, max_message_size=self.max_message_size
                 ):
@@ -544,9 +696,29 @@ class GRPCServerCommunicator(GRPCCommunicatorServicer):
 
             chunk_count += 1
             # Periodic garbage collection for large responses
-            if chunk_count % 50 == 0:
+            if chunk_count % 20 == 0:
                 gc.collect()
 
         # Final cleanup
         del data_bytes
+        gc.collect()
+
+    def _stream_raw_bytes(self, data_bytes, max_message_size=(2 * 1024 * 1024)):
+        """
+        Stream raw bytes as DataBuffer chunks WITHOUT protobuf wrapping.
+        This avoids protobuf size limits and parsing overhead for large models.
+        """
+        chunk_size = int(0.9 * max_message_size)
+        total_size = len(data_bytes)
+
+        chunk_count = 0
+        for i in range(0, total_size, chunk_size):
+            chunk = data_bytes[i : i + chunk_size]
+            yield DataBuffer(data_bytes=chunk)
+
+            chunk_count += 1
+            # Periodic garbage collection for large transfers
+            if chunk_count % 20 == 0:
+                gc.collect()
+
         gc.collect()
