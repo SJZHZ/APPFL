@@ -22,6 +22,7 @@ def _require_cert(arg_value, flag_name):
         )
     return load_credential_from_file(arg_value)
 
+
 ## read arguments
 parser = argparse.ArgumentParser()
 parser.add_argument("--device", type=str, default="cpu")
