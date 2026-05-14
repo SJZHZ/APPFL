@@ -62,7 +62,7 @@ setuptools.setup(
     packages=setuptools.find_packages(where="src"),
     include_package_data=True,
     package_data={
-        "": ["*.sh", "*.crt", "*.key"],
+        "": ["*.sh"],
     },
     python_requires=">=3.8",
     install_requires=[
