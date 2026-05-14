@@ -24,21 +24,28 @@ Currently, we provide the two authenticators,
 - [`NaiveAuthenticator`](naive)
 - [`GlobusAuthenticator`](globus)
 
-`NaiveAuthenticator` simply uses hardcoded token for demonstration purposes.
+`NaiveAuthenticator` is a shared-secret scheme: the same `auth_token` must be configured on the server and on every client, and the server admits any peer that presents it. It is intended for demos and trusted-network testing only — production deployments should use `GlobusAuthenticator` (or another identity-bound mechanism).
+
+The token must be supplied explicitly (there is no default) and must be at least 16 characters. Mint one with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Then construct the authenticator with the same string on both sides:
 
 ```python
-class NaiveAuthenticator(BaseAuthenticator):
-    """
-    A naive authenticator that uses a hardcoded token for authentication.
-    It is only used for demonstration purposes.
-    """
-    def get_auth_token(self) -> Dict[str, str]:
-        return {
-            "auth_token": "appfl-naive-auth-token"
-        }
+from appfl.login_manager import NaiveAuthenticator
 
-    def validate_auth_token(self, token: dict) -> bool:
-        return token.get("auth_token") == "appfl-naive-auth-token"
+auth = NaiveAuthenticator(auth_token="<your-32-char-secret>")
+```
+
+When loaded from a config file, the equivalent shape is:
+
+```yaml
+authenticator: NaiveAuthenticator
+authenticator_args:
+  auth_token: "<your-32-char-secret>"
 ```
 
 ## Globus Authenticator
