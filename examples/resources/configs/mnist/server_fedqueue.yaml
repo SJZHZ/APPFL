@@ -48,6 +48,17 @@ server_configs:
     alpha_compute: 0.5
     safety_buffer: 0.5
     admission_tolerance: 0.15
+    simulate_queue: false
+    log_fedqueue_metrics: false
+    q_init: 2.0
+    alpha_admission: 0.2
+    beta_queue: 0.2
+    theta: 0.5
+    queue_mode: "lognormal"
+    queue_means: "1.5,2.0"
+    queue_sigma: 0.4
+    slowdown: "1.0,1.0"
+    fedqueue_log_dir: "./output"
   aggregator: "FedQueueAggregator"
   aggregator_kwargs:
     staleness_fn: "harmonic"

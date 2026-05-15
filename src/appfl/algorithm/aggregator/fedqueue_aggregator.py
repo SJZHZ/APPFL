@@ -72,12 +72,7 @@ class FedQueueAggregator(BaseAggregator):
 
         gradient_based = self.aggregator_configs.get("gradient_based", False)
 
-        local_step_sum = sum(local_steps.values())
-        aggregation_factors = {
-            client_id: self.staleness_fn(staleness[client_id])
-            * (local_steps[client_id] / local_step_sum)
-            for client_id in local_steps
-        }
+        aggregation_factors = self._get_aggregation_factors(local_models, staleness)
         aggregation_factor_sum = sum(aggregation_factors.values())
         aggregation_factors = {
             client_id: factor / aggregation_factor_sum
@@ -139,6 +134,39 @@ class FedQueueAggregator(BaseAggregator):
             self.model.load_state_dict(self.global_state, strict=False)
 
         return clone_state_dict_optimized(self.global_state)
+
+    def _get_aggregation_factors(
+        self,
+        local_models: Dict[Union[str, int], Union[Dict, OrderedDict]],
+        staleness: Dict[Union[str, int], int],
+    ) -> Dict[Union[str, int], float]:
+        """
+        FedQueue uses data-size client weights and staleness decay. Local steps
+        only affect client-side work and learning-rate scaling, not aggregation.
+        """
+        if hasattr(self, "client_sample_size") and all(
+            client_id in self.client_sample_size for client_id in local_models
+        ):
+            total_sample_size = sum(
+                self.client_sample_size[client_id] for client_id in local_models
+            )
+            if total_sample_size > 0:
+                return {
+                    client_id: self.staleness_fn(staleness[client_id])
+                    * (self.client_sample_size[client_id] / total_sample_size)
+                    for client_id in local_models
+                }
+
+        if self.logger is not None:
+            self.logger.warning(
+                "FedQueueAggregator did not receive sample sizes for all "
+                "participating clients; falling back to equal client weights."
+            )
+        return {
+            client_id: self.staleness_fn(staleness[client_id])
+            * (1.0 / len(local_models))
+            for client_id in local_models
+        }
 
     def get_parameters(self, **kwargs) -> Dict:
         if self.global_state is None:
