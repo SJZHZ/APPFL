@@ -106,9 +106,16 @@ class VanillaTrainer(BaseTrainer):
         Train the model for a certain number of local epochs or steps and store the mode state
         (probably with perturbation for differential privacy) in `self.model_state`.
         """
+        if "local_steps" in kwargs:
+            self.train_configs.num_local_steps = kwargs["local_steps"]
+        if "learning_rate" in kwargs:
+            self.train_configs.optim_args.lr = kwargs["learning_rate"]
         if "round" in kwargs:
             self.round = kwargs["round"]
         self.val_results = {"round": self.round + 1}
+
+        if "start_time" in kwargs:
+            self.val_results["queue_time"] = time.time() - kwargs["start_time"]
 
         # Store the previous model state for gradient computation
         send_gradient = self.train_configs.get("send_gradient", False)
@@ -321,6 +328,9 @@ class VanillaTrainer(BaseTrainer):
                 self.val_results["val_loss"] = val_loss
                 self.val_results["val_accuracy"] = val_accuracy
             per_step_time = time.time() - start_time
+            self.val_results["compute_second_per_step"] = (
+                per_step_time / self.train_configs.num_local_steps
+            )
             if self.enabled_wandb:
                 wandb.log(
                     {
