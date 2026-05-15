@@ -106,6 +106,8 @@ class VanillaTrainer(BaseTrainer):
         Train the model for a certain number of local epochs or steps and store the mode state
         (probably with perturbation for differential privacy) in `self.model_state`.
         """
+        if "queue_delay" in kwargs:
+            time.sleep(max(0.0, float(kwargs["queue_delay"])))
         if "local_steps" in kwargs:
             self.train_configs.num_local_steps = kwargs["local_steps"]
         if "learning_rate" in kwargs:
@@ -116,6 +118,10 @@ class VanillaTrainer(BaseTrainer):
 
         if "start_time" in kwargs:
             self.val_results["queue_time"] = time.time() - kwargs["start_time"]
+        if "queue_delay" in kwargs:
+            self.val_results["queue_delay"] = kwargs["queue_delay"]
+        if "origin_round" in kwargs:
+            self.val_results["origin_round"] = kwargs["origin_round"]
 
         # Store the previous model state for gradient computation
         send_gradient = self.train_configs.get("send_gradient", False)
@@ -328,6 +334,10 @@ class VanillaTrainer(BaseTrainer):
                 self.val_results["val_loss"] = val_loss
                 self.val_results["val_accuracy"] = val_accuracy
             per_step_time = time.time() - start_time
+            if "slowdown" in kwargs and float(kwargs["slowdown"]) > 1.0:
+                slow_padding = per_step_time * (float(kwargs["slowdown"]) - 1.0)
+                time.sleep(slow_padding)
+                per_step_time += slow_padding
             self.val_results["compute_second_per_step"] = (
                 per_step_time / self.train_configs.num_local_steps
             )
