@@ -21,7 +21,7 @@ The script writes (by default) to `~/.appfl/ssl/`:
 - `ca.key` and `ca.crt` — the CA private key and self-signed certificate.
   Keep `ca.key` private; ship `ca.crt` to every client that should trust
   this federation.
-- `server.key` and `server.pem` — the server's private key and the
+- `server.key` and `server.crt` — the server's private key and the
   CA-signed certificate to present on the wire.
 
 Then point your APPFL config at those paths:
@@ -29,7 +29,7 @@ Then point your APPFL config at those paths:
 ```yaml
 server:
   server_certificate_key: /home/<you>/.appfl/ssl/server.key
-  server_certificate:     /home/<you>/.appfl/ssl/server.pem
+  server_certificate:     /home/<you>/.appfl/ssl/server.crt
 client:
   root_certificates:      /home/<you>/.appfl/ssl/ca.crt
 ```
