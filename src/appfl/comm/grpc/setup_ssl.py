@@ -128,7 +128,7 @@ openssl x509 \\
     -CA $CERT_DIR/ca.crt \\
     -CAkey $CERT_DIR/ca.key \\
     -CAcreateserial \\
-    -out $CERT_DIR/server.pem \\
+    -out $CERT_DIR/server.crt \\
     -days 365 \\
     -sha256 \\
     -extfile {conf_file} \\
@@ -144,7 +144,7 @@ openssl x509 \\
         subprocess.run([script_file], check=True)
         print_str = f"Please copy the CA certificate {os.path.join(ssl_dir, 'ca.crt')} to the client machines"
         print("=" * len(print_str))
-        print(f"SSL certificate stored in {os.path.join(ssl_dir, 'server.pem')}")
+        print(f"SSL certificate stored in {os.path.join(ssl_dir, 'server.crt')}")
         print(f"SSL private key stored in {os.path.join(ssl_dir, 'server.key')}")
         print(f"CA certificate stored in  {os.path.join(ssl_dir, 'ca.crt')}")
         print(print_str)
