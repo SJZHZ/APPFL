@@ -1,19 +1,18 @@
 import time
 import torch
 import importlib
+import copy
 from torch.nn import Module
 from omegaconf import DictConfig
 # import yaml
 
-from typing import Optional, Any
+from typing import Optional, Any, Tuple
 from torch_geometric.loader import DataLoader
 
 # from torch.utils.data import Dataset
 from torch_geometric.data import Dataset
 from appfl.algorithm.trainer.vanilla_trainer import VanillaTrainer
-from appfl.misc.utils import apply_model_device
-
-from gridfm_graphkit.training.loss import PBELoss
+from appfl.misc.utils import apply_model_device, parse_device_str
 
 
 class GridFMTrainer(VanillaTrainer):
@@ -39,18 +38,6 @@ class GridFMTrainer(VanillaTrainer):
             **kwargs,
         )
 
-        # config_path = "./resources/configs/grid/gridfm_graphkit.yaml"
-        # with open(config_path, "r") as f:
-        #     config_dict = yaml.safe_load(f)
-
-        # config_args = NestedNamespace(**config_dict)
-
-        # data_module = LitGridDataModule(config_args, "data")
-        # data_module.setup("train")
-
-        # self.train_dataloader = data_module.train_dataloader()
-        # self.val_dataloader = data_module.val_dataloader()
-
         self.train_dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.train_configs.train_batch_size,
@@ -73,10 +60,10 @@ class GridFMTrainer(VanillaTrainer):
             self.model.parameters(), **self.train_configs.optim_args
         )
 
-        self.loss_fn = PBELoss()
+        if self.loss_fn is None and hasattr(self.model, "loss_fn"):
+            self.loss_fn = self.model.loss_fn
 
-        # self.device_config, self.device = parse_device_str(self.train_configs.device)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device_config, self.device = parse_device_str(self.train_configs.device)
 
     def train(self, **kwargs):
         if "round" in kwargs:
@@ -187,6 +174,7 @@ class GridFMTrainer(VanillaTrainer):
             )
 
         self.round += 1
+        self.model_state = copy.deepcopy(self.model.state_dict())
 
         if "cuda" in self.train_configs.device:
             for k in self.model_state:
@@ -194,22 +182,24 @@ class GridFMTrainer(VanillaTrainer):
 
     def _train_batch(self, batch):
         batch = batch.to(self.device)
-        outputs = self.model(
-            x=batch.x,
-            pe=batch.pe,
-            edge_index=batch.edge_index,
-            edge_attr=batch.edge_attr,
-            batch=batch.batch,
-            mask=batch.mask,
-        )
-
-        loss_dict = self.loss_fn(
-            outputs,
-            batch.y,
-            batch.edge_index,
-            batch.edge_attr,
-            batch.mask,
-        )
+        if hasattr(self.model, "shared_step"):
+            outputs, loss_dict = self.model.shared_step(batch)
+        else:
+            outputs = self.model(
+                x=batch.x,
+                pe=batch.pe,
+                edge_index=batch.edge_index,
+                edge_attr=batch.edge_attr,
+                batch=batch.batch,
+                mask=batch.mask,
+            )
+            loss_dict = self.loss_fn(
+                outputs,
+                batch.y,
+                batch.edge_index,
+                batch.edge_attr,
+                batch.mask,
+            )
         loss = loss_dict["loss"]
 
         self.optimizer.zero_grad()
@@ -218,31 +208,31 @@ class GridFMTrainer(VanillaTrainer):
 
         return loss.item(), outputs
 
-    def _validate(self):
+    def _validate(self) -> Tuple[float, str]:
         self.model.eval()
-        val_loss = 0.0
-
+        total_loss = 0.0
         with torch.no_grad():
             for batch in self.val_dataloader:
                 batch = batch.to(self.device)
-                outputs = self.model(
-                    x=batch.x,
-                    pe=batch.pe,
-                    edge_index=batch.edge_index,
-                    edge_attr=batch.edge_attr,
-                    batch=batch.batch,
-                    mask=batch.mask,
-                )
-                loss_dict = self.loss_fn(
-                    outputs,
-                    batch.y,
-                    batch.edge_index,
-                    batch.edge_attr,
-                    batch.mask,
-                )
-                loss = loss_dict["loss"]
-                val_loss += loss.item()
-
-        avg_val_loss = val_loss / len(self.val_dataloader)
-        # print(f"Validation - Loss: {avg_val_loss:.4f}")
-        return avg_val_loss, "N/A"
+                if hasattr(self.model, "shared_step"):
+                    _, loss_dict = self.model.shared_step(batch)
+                    loss = loss_dict["loss"]
+                else:
+                    outputs = self.model(
+                        x=batch.x,
+                        pe=batch.pe,
+                        edge_index=batch.edge_index,
+                        edge_attr=batch.edge_attr,
+                        batch=batch.batch,
+                        mask=batch.mask,
+                    )
+                    loss = self.loss_fn(
+                        outputs,
+                        batch.y,
+                        batch.edge_index,
+                        batch.edge_attr,
+                        batch.mask,
+                    )["loss"]
+                total_loss += loss.item()
+        self.model.train()
+        return total_loss / len(self.val_dataloader), "N/A"

@@ -1,0 +1,42 @@
+network:
+  name: case57_ieee
+  source: file
+  network_dir: /home/sjzhz/FL/gridfm-datakit/scripts/grids
+
+load:
+  generator: agg_load_profile
+  agg_profile: default
+  scenarios: 1000
+  sigma: 0.2
+  change_reactive_power: true
+  global_range: 0.4
+  max_scaling_factor: 4.0
+  step_size: 0.1
+  start_scaling_factor: 1.0
+
+topology_perturbation:
+  type: none
+  k: 1
+  n_topology_variants: 1
+  elements: [branch, gen]
+
+generation_perturbation:
+  type: none
+  sigma: 1.0
+
+admittance_perturbation:
+  type: none
+  sigma: 0.2
+
+settings:
+  num_processes: 6
+  data_dir: /home/sjzhz/tmp/gridfm_multi_case
+  large_chunk_size: 200
+  overwrite: true
+  mode: pf
+  include_dc_res: true
+  enable_solver_logs: true
+  pf_fast: true
+  dcpf_fast: true
+  max_iter: 200
+  seed: 5700
